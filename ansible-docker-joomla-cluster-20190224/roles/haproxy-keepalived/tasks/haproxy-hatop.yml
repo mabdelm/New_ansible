@@ -1,0 +1,28 @@
+---
+- name: Deploy Dockerfile template
+  template:
+    src: HAproxy-Dockerfile.j2
+    dest: /root/haproxy/Dockerfile
+
+- name: Copy docker-entrypoint.sh
+  copy:
+    src: docker-entrypoint.sh
+    dest: /root/haproxy
+    mode: "u+x,g+x,o+x"
+
+- name: Build HAproxy Docker image
+  shell: |
+    docker build -t haproxy /root/haproxy/ > /root/haproxy/build.log
+
+- name: Run HAproxy docker container
+  docker_container:
+    name: eezyn_haproxy
+    hostname: "haproxy_{{ ansible_hostname }}"
+    image: haproxy
+    ports:
+      - "80:80"
+      - "443:443"
+      - "{{ haproxy_stats_port }}:{{ haproxy_stats_port }}"
+    volumes:
+      - /root/haproxy:/usr/local/etc/haproxy
+    recreate: yes

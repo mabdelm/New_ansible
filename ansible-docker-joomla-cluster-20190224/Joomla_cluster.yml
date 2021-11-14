@@ -1,0 +1,12 @@
+---
+- name: Common settings for all nodes
+  import_playbook: Common.yml
+
+- name: Configure Load Balancers
+  import_playbook: Load_balancer.yml
+
+- name: Configure App servers & Backup servers
+  import_playbook: App_server.yml
+
+- name: Configure nagios in all nodes
+  import_playbook: Nagios.yml

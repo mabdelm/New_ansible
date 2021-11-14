@@ -1,0 +1,49 @@
+---
+- block:
+    - name: Create Nagios folder
+      file:
+        path: /root/nagios/settings
+        state: directory
+
+    - name: Copy Nagios Dockerfile and dependencies
+      copy:
+        src: "{{ item.src }}"
+        dest: "/root/nagios/{{ item.dest }}"
+      with_items:
+        - { src: Dockerfile, dest: Dockerfile }
+        - { src: entrypoint.sh, dest: entrypoint.sh }
+        - { src: nagios.cfg, dest: settings/nagios.cfg }
+
+    - name: Fetch nagios server configs
+      template:
+        src: "{{ item }}.j2"
+        dest: "/root/nagios/settings/{{ item }}"
+      with_items:
+        - commands.cfg
+        - contacts.cfg
+        - hostgroup.cfg
+        - hosts.cfg
+        - service-ping-ssh.cfg
+        - service-custom-http.cfg
+        - service-nrpe-common.cfg
+        - ssmtp.conf
+
+    - name: +x attrib to nagios files
+      file:
+        path: /root/nagios/entrypoint.sh
+        mode: "u+x,g+x,o+x"
+
+    - name: Build Nagios Docker image
+      shell: |
+        docker build -t nagios /root/nagios/ > /root/nagios/build.log
+
+    - name: Run Nagios docker container
+      docker_container:
+        name: eezyn_nagios
+        hostname: "nagios_{{ ansible_hostname }}"
+        image: nagios
+        network_mode: host
+        recreate: yes
+        env:
+            NAGIOSADMIN_EMAIL: "{{ nagios_notify_to }}"   
+  when: inventory_hostname in groups['nagios_server']

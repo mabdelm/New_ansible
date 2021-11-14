@@ -1,0 +1,9 @@
+{% for server in play_hosts %}
+define service {
+    use			    generic-service
+    host_name          	    {{ hostvars[server].ansible_hostname }}
+    service_description     CHECK http service
+    check_command           check_http!-H {{ hostvars[server].ansible_hostname }}
+}
+
+{% endfor %}

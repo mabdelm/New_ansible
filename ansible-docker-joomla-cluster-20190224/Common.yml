@@ -1,0 +1,165 @@
+---
+- name: Previous AppSrv & BkSrv check before run the scripts
+  hosts: all
+  vars_files:
+    - vars/main.yml
+  tasks:
+    - name: AppSrv & BkSrv nodes count
+      set_fact:
+        nodes: "{{ groups['galera'] | length }}"
+
+    - name: Stop playbook if you try to restore the site including all AppSrv & BkSrv
+      fail:
+        msg: "For better performance and shorter implementation times, the website should be restored only on the primary node. Edit the Ansible hosts file, enable only the primary node and restore the website. Then enable all cluster nodes and run the playbook in reconfiguration-scalability mode"
+      when: restore_site is defined and nodes | int > 1
+
+- name: Previous AppSrv check before run the scripts
+  hosts: galera
+  vars_files:
+    - vars/main.yml
+  tasks:
+    - name: Check non-replicated primary folder
+      find:
+        paths: /root/joomla/joomla_web_data
+        file_type: any
+      delegate_to: "{{ primary }}"
+      register: joom
+
+    - name: Check replicated primary folder
+      find:
+        paths: /root/gluster/brick
+        file_type: any
+      delegate_to: "{{ primary }}"
+      register: glus
+
+    - name: Stop playbook if you try to reconfig - scalate the site having web data in both replicated & non-replicated folders
+      fail:
+        msg: "There are web data in both replicated and non-replicated folders. Please check /root/gluster/brick & /root/joomla/joomla_web_data paths and clean the unused"
+      when: nodes | int > 1 and glus.matched | int > 0 and joom.matched | int > 0 and new_cluster is not defined and restore_site is not defined
+      delegate_to: primary
+
+- name: Common settings for all nodes
+  hosts: all
+  vars_files:
+    - vars/main.yml
+  tasks:
+    - block:
+        - name: Check ssh key
+          find:
+            paths: ~/.ssh
+            patterns: "id_rsa"
+          register: ssh_key
+
+        - name: Build SSH key files
+          shell: |
+            yes y | ssh-keygen -q -b 2048 -t rsa -N "" -f ~/.ssh/id_rsa >/dev/null
+          when: ssh_key.matched | int == 0
+
+        - name: Fetch the keyfile
+          fetch: 
+            src: "~/.ssh/id_rsa.pub"
+            dest: "joomla_ssh/{{inventory_hostname}}-id_rsa.pub"
+            flat: yes
+
+        - name: Enable SSH Public Key Authentication between all cluster nodes
+          authorized_key:
+            user: "{{ ansible_user_id }}"
+            state: present
+            key: "{{ lookup('file','joomla_ssh/{{item}}-id_rsa.pub')}}"
+          when: item != inventory_hostname
+          with_items:
+            - "{{ groups['all'] }}"
+
+        - name: Remove previous known_hosts
+          file:
+            path: ~/.ssh/known_hosts
+            state: absent
+
+        - name: Known hosts between all cluster nodes
+          shell: |
+            ssh-keyscan -t ecdsa {{ item }} >> ~/.ssh/known_hosts
+          when: item != inventory_hostname
+          with_items:
+            - "{{ groups['all'] }}"
+      when: nodes | int > 1
+
+    - name: Stop Docker service if exists
+      systemd:
+        name: docker
+        state: stopped
+      failed_when: False
+
+    - name: Make SELinux permissive
+      command: setenforce 0
+
+    - name: Set docker-sysctl IPV4 forwarding settings
+      sysctl:
+        name: net.ipv4.conf.all.forwarding
+        value: 1
+        sysctl_set: yes
+
+    - name: Set docker-iptables settings
+      iptables:
+        chain: FORWARD
+        policy: ACCEPT
+
+    - name: Install prerequisites
+      yum:
+        name: [ yum-utils, device-mapper-persistent-data, lvm2, unzip, rsync ]
+
+    - name: Add Docker-ce repo
+      shell: |
+        yum-config-manager --add-repo {{ docker_repo }}
+
+    - name: Add EPEL repo
+      yum:
+        name: "{{ epel_repo }}"
+        state: present
+
+    - name: Update OS
+      yum:
+        name: "*"
+        state: latest
+
+    - name: Install python-pip and NTP
+      yum:
+        name: [ python-pip, ntp ]
+        state: latest
+
+    - name: Update python-pip
+      pip:
+        name: pip
+        extra_args: --upgrade
+
+    - name: Install docker python package
+      pip:
+        name: docker
+
+    - name: Install Docker Engine
+      yum:
+        name: docker-ce
+        state: latest
+
+    - name: Start and enable Docker, Firewalld and NTP
+      service:
+        name: "{{ item }}"
+        state: started
+        enabled: yes
+      with_items:
+        - docker
+        - firewalld
+        - ntpd
+
+    - name: Firewalld - Punch a hole for NTP
+      firewalld:
+        service: ntp
+        permanent: true
+        state: enabled
+        immediate: yes
+
+    - name: Docker Hub login
+      docker_login:
+        email: "{{ docker_hub_email }}"
+        username: "{{ docker_hub_user }}"
+        password: "{{ docker_hub_passwd }}"
+        state: present

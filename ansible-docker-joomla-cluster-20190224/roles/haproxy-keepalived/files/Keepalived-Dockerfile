@@ -1,0 +1,15 @@
+# https://projects.task.gda.pl/task-cloud/kolla/tree/52f49094356ca70495e3bc606751d55104726881/docker/centos/binary/keepalived
+
+FROM centos:centos7
+
+MAINTAINER Kolla Project (https://launchpad.net/kolla)
+
+RUN yum -y install \
+        hostname \
+        keepalived \
+        socat \
+    && yum clean all
+
+COPY keepalived.conf /etc/keepalived/
+
+CMD ["/usr/sbin/keepalived", "-nld", "-p", "/run/keepalived.pid"]

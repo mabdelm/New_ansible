@@ -1,0 +1,59 @@
+{% for group in group_list %}
+{% if groups[group]|length != 0 %}
+define service {
+    use			    generic-service
+    hostgroup_name          {{group}}
+    service_description     NRPE Check Load
+    check_command           check_nrpe!check_load
+    check_interval 4
+    retry_interval 1
+    max_check_attempts 2
+    notification_interval 5
+}
+
+define service {
+    use             generic-service
+    hostgroup_name          {{group}}
+    service_description     NRPE Check RAM
+    check_command           check_nrpe!check_mem
+    check_interval 4
+    retry_interval 1
+    max_check_attempts 2
+    notification_interval 5
+}
+
+define service {
+    use			    generic-service
+    hostgroup_name          {{group}}
+    service_description     NRPE Check RootFS
+    check_command           check_nrpe!check_rootfs
+    check_interval 4
+    retry_interval 1
+    max_check_attempts 2
+    notification_interval 5
+}
+
+define service {
+    use			    generic-service
+    hostgroup_name          {{group}}
+    service_description     NRPE Check Zombie Procs
+    check_command           check_nrpe!check_zombie_procs
+    check_interval 4
+    retry_interval 1
+    max_check_attempts 2
+    notification_interval 5
+}
+
+define service {
+    use			    generic-service
+    hostgroup_name          {{group}}
+    service_description     NRPE Check Total Procs
+    check_command           check_nrpe!check_total_procs
+    check_interval 4
+    retry_interval 1
+    max_check_attempts 2
+    notification_interval 5
+}
+
+{% endif %}
+{% endfor %}

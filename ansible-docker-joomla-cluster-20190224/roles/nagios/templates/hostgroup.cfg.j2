@@ -1,0 +1,9 @@
+{% for group in group_list %}
+{% if groups[group]|length != 0 %}
+define hostgroup {
+		hostgroup_name	{{group}}
+		members	{% for server in groups[group] %}{{ hostvars[server].ansible_hostname }}{% if not loop.last %},{% endif %}{% endfor %} 
+}
+
+{% endif %}
+{% endfor %}

@@ -1,0 +1,34 @@
+---
+- name: Firewalld - Punch a hole for Memcached
+  firewalld:
+    port: 11211/tcp
+    permanent: true
+    state: enabled
+    immediate: yes
+
+- name: Create folder for Memcached Docker files
+  file:
+    path: /root/memcached
+    state: directory
+
+- name: Deploy memcached.j2 template
+  template:
+    src: memcached.j2
+    dest: /root/memcached/memcached.cnf
+
+- name: Copy Dockerfile
+  copy:
+    src: Dockerfile
+    dest: /root/memcached
+
+- name: Build Memcached Docker image
+  shell: |
+    docker build -t memcached /root/memcached/ > /root/memcached/build.log
+
+- name: Run Memcached docker container
+  docker_container:
+    name: eezyn_memcached
+    hostname: "memcached_{{ ansible_hostname }}"
+    network_mode: host
+    image: memcached
+    recreate: yes

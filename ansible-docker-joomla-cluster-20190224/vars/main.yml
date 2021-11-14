@@ -1,0 +1,94 @@
+##########################################################################
+# Variable new_cluster:
+#
+# Please uncomment this line ONLY if you want to deploy a new Joomla cluster.
+# If the variable new_cluster are defined when the Joomla cluster is already deployed,
+# ALL JOOMLA DATA WILL BE DELETED from database.
+#
+##########################################################################
+# new_cluster: yes
+
+
+##########################################################################
+# Variables to perform restore Joomla site from a Akeeba backup file:
+#
+# You need to specify the name of the Akeeba backup file
+# and the Ansible server directory where it is hosted
+###########################################################################
+# restore_site: yes
+# joomla_bakup_file: "site-eezynsite.jdevcloud.com-20180512-225950utc.jpa"
+# joomla_backup_file_path: "/tmp"
+
+
+###########################################################################
+# When new_cluster and restore_site variables aren't defined,
+# the Joomla cluster is automatically reconfigured:
+#  * Scalability: Add and/or remove servers from the Joomla cluster.
+#  * Reconfigure parameters defined in the variables of this file.
+#
+# If you want to include/exclude a server from the Joomla cluster,
+# simply add/remove it from the ansible host file and run the main playbook
+# without defining the previous variables.
+
+
+# Common settings
+docker_hub_email: eezyn_docker@eezyn.com
+docker_hub_user: eezyn
+docker_hub_passwd: E3zynD0ck3r
+docker_repo: "https://download.docker.com/linux/centos/docker-ce.repo"
+epel_repo: "https://dl.fedoraproject.org/pub/epel/epel-release-latest-7.noarch.rpm"
+
+# HAProxy settings
+haproxy_interface: ens34
+haproxy_ansible_interface: "ansible_{{ haproxy_interface }}"
+haproxy_bind_address: "*"
+haproxy_user: haproxy
+haproxy_pass: joomla
+haproxy_stats_uri: "/stats"
+haproxy_stats_port: 8181
+
+# hatop settings
+hatop_download_url: "https://github.com/feurix/hatop/archive/master.zip"
+
+# Keepalived settings
+keepalived_bind_interface: ens34
+keepalived_vip: 192.168.3.25
+keepalived_priority: 1
+
+# MariaDB settings
+cluster_interface: ens34
+mariadb_root_paswd: 123456
+ansible_cluster_interface: "ansible_{{ cluster_interface }}"
+
+# Joomla settings
+joomla_db: joomla
+joomla_db_prefix: gzcs6_
+joomla_db_user: joomla
+joomla_db_pass: joomla
+joomla_v: 3.6.5
+kickstart_download_url: "https://www.akeebabackup.com/download/akeeba-kickstart/6-0-1/kickstart-core-6-0-1-zip.zip"
+
+# php.ini settings
+max_input_vars: 10000
+memory_limit: 128M
+max_execution_time: 300
+max_input_time: -1
+upload_max_filesize: 25M
+post_max_size: 20M
+suhosin_post_max_vars: 10000
+suhosin_get_max_vars: 10000
+
+# Memcached settings
+memcached_connections: 1024
+memcached_memory_limit: 1G
+memcached_log_file: "/var/log/memcached.log"
+
+# Nagios Settings
+nagios_interface: ens34
+nagios_notify_to: test@eezyn.com        # Email account that will receive notifications from Nagios
+postfix_email_sender: joomla@eezyn.com
+postfix_email_passwd: "Joomla@2018"
+postfix_smtp_server: mail.eezyn.com
+postfix_smtp_port: 587
+nagios_ansible_interface: "ansible_{{ nagios_interface }}"
+group_list: ["app_servers","load_balancers","backup_servers"]

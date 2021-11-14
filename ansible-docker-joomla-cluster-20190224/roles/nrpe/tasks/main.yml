@@ -1,0 +1,41 @@
+---
+- name: Firewalld - Punch a hole for NRPE
+  firewalld:
+    port: 5666/tcp
+    permanent: true
+    state: enabled
+    immediate: yes
+
+- name: Create NRPE folder
+  file:
+    path: /root/nrpe
+    state: directory
+
+- name: Copy Dockerfile
+  copy:
+    src: Dockerfile
+    dest: /root/nrpe/Dockerfile
+
+- name: Copy dependencies
+  copy:
+    src: files
+    dest: /root/nrpe
+    directory_mode: yes
+    mode: 0755
+
+- name: Build NRPE Docker image
+  shell: |
+    docker build -t nrpe /root/nrpe/ > /root/nrpe/build.log
+
+- name: Run NRPE docker container
+  docker_container:
+    name: eezyn_nrpe
+    hostname: "nrpe_{{ ansible_hostname }}"
+    image: nrpe
+    recreate: yes
+    ports:
+        - "5666:5666"
+    env:
+        NAGIOS_SERVER: "{{ groups['nagios_server'] | list | join('') }}"
+    volumes:
+        - /dev/sda1:/dev/sda1

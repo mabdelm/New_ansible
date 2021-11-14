@@ -1,0 +1,34 @@
+---
+- name: Install ipvsadm
+  yum:
+    name: ipvsadm
+    state: latest
+
+- name: Enable ipvsadm
+  shell: |
+    modprobe ip_vs
+
+- name: Deploy jinja2 template
+  template:
+    src: keepalived.conf.j2
+    dest: /root/keepalived/keepalived.conf
+    force: yes
+
+- name: Copy Dockerfile
+  copy:
+    src: Keepalived-Dockerfile
+    dest: /root/keepalived/Dockerfile
+
+- name: Build Keepalived Docker image
+  shell: |
+    docker build -t keepalived /root/keepalived/ > /root/keepalived/build.log
+
+- name: Run Keepalived docker container
+  docker_container:
+    name: eezyn_keepalived
+    hostname: "keepalived_{{ ansible_hostname }}"
+    image: keepalived
+    network_mode: host
+    capabilities:
+      - NET_ADMIN
+    recreate: yes

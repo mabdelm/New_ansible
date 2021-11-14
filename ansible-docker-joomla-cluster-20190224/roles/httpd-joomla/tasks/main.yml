@@ -1,0 +1,169 @@
+---
+- name: Firewalld - Punch a hole for Joomla
+  firewalld:
+    port: "{{ item }}"
+    permanent: true
+    state: enabled
+    immediate: yes
+  with_items:
+    - 80/tcp
+    - 443/tcp
+
+- name: Reconfig & Scalability - Scale Down | Move web data to non-replicated folder
+  shell: |
+    mv /root/gluster/brick/* /root/joomla/joomla_web_data/
+  when: inventory_hostname == primary and glus.matched | int > 0 and nodes | int  == 1 and new_cluster is not defined and restore_site is not defined
+
+- name: Restore Site | Download Akeeba kickstart
+  unarchive:
+    src: "{{ kickstart_download_url }}"
+    dest: /root/joomla/joomla_web_data
+    remote_src: yes
+  when: restore_site is defined
+
+- name: Restore Site | Copy Akeeba backup file on Joomla web path
+  copy:
+    src: "{{ joomla_backup_file_path }}/{{ joomla_bakup_file }}"
+    dest: /root/joomla/joomla_web_data
+  when: restore_site is defined
+
+- name: Copy needed files
+  copy:
+    src: "{{ item.file }}"
+    dest: "{{ item.path }}"
+  with_items:
+    - { file: phpinfo.php, path: /root/joomla/joomla_web_data }
+    - { file: makedb.php, path: /root/joomla }
+
+- name: Deploy joomla jinja2 templates
+  template:
+    src: "{{ item.file }}.j2"
+    dest: "{{ item.path }}/{{ item.file }}"
+  with_items:
+    - { file: configuration.php, path: /root/joomla/joomla_web_data }
+    - { file: php.ini, path: /root/joomla/joomla_web_data }
+    - { file: joomla.sql, path: /root/joomla }
+    - { file: Dockerfile, path: /root/joomla }
+    - { file: docker-entrypoint.sh, path: /root/joomla }
+
+- name: +x attrib to docker-entrypoint.sh file
+  file:
+    path: "/root/joomla/docker-entrypoint.sh"
+    mode: "u+x,g+x,o+x"
+
+- name: Build Joomla docker image
+  shell: |
+    docker build -t joomla /root/joomla/ > /root/joomla/build.log
+
+- name: Common settings for web data replication
+  block:
+    - name: Reconfig & Scalability - Scale Up | Sync web data
+      synchronize:
+        src: /root/joomla/joomla_web_data/
+        dest: /root/joomla/joomla_web_data/
+        delete: yes
+      delegate_to: "{{ primary }}"
+      when: new_cluster is not defined and inventory_hostname != primary and hostvars[primary]['joom']['matched'] | int > 0
+
+    - name: Move Joomla web files to Gluster
+      shell: |
+        mv /root/joomla/joomla_web_data/* /root/gluster/brick/
+
+    - name: Configure Gluster volume for Joomla web data replication
+      shell: |
+        docker exec -it eezyn_gluster gluster volume create joomla_volume replica {{ play_hosts | length }} transport tcp {{ play_hosts | map('extract', hostvars, [ansible_cluster_interface,'ipv4','address']) | list | join(':/data/brick/joomla ') }}:/data/brick/joomla force && \
+        docker exec -it eezyn_gluster gluster volume set joomla_volume performance.io-cache on && \
+        docker exec -it eezyn_gluster gluster volume set joomla_volume performance.cache-size 500MB && \
+        docker exec -it eezyn_gluster gluster volume set joomla_volume performance.io-thread-count 16 && \
+        docker exec -it eezyn_gluster gluster volume set joomla_volume performance.readdir-ahead enable && \
+        docker exec -it eezyn_gluster gluster volume set joomla_volume performance.read-ahead disable && \
+        docker exec -it eezyn_gluster gluster volume set joomla_volume performance.stat-prefetch on && \
+        docker exec -it eezyn_gluster gluster volume set joomla_volume performance.client-io-threads on && \
+        docker exec -it eezyn_gluster gluster volume set joomla_volume performance.write-behind-window-size 1MB && \
+        docker exec -it eezyn_gluster gluster volume set joomla_volume performance.strict-o-direct off && \
+        docker exec -it eezyn_gluster gluster volume set joomla_volume performance.strict-write-ordering off && \
+        docker exec -it eezyn_gluster gluster volume set joomla_volume cluster.lookup-optimize on && \
+        docker exec -it eezyn_gluster gluster volume set joomla_volume client.event-threads 4 && \
+        docker exec -it eezyn_gluster gluster volume set joomla_volume server.event-threads 4 && \
+        docker exec -it eezyn_gluster gluster volume set joomla_volume cluster.readdir-optimize on && \
+        docker exec -it eezyn_gluster gluster volume set joomla_volume cluster.shd-max-threads 8
+      when: inventory_hostname == primary
+
+    - name: Start GlusterFS volume (replicated)
+      shell: |
+        docker exec -it eezyn_gluster gluster volume start joomla_volume
+      when: inventory_hostname == primary
+  when: nodes | int  > 1
+
+- name: Settings on primary node
+  block:
+    - name: New Cluster | Import DB
+      shell: "docker exec -i eezyn_galera mysql -u{{ joomla_db_user }} -p{{ joomla_db_pass }} {{ joomla_db }} < /root/joomla/joomla.sql"
+      when: new_cluster is defined
+
+    - name: Run Joomla docker container on primary node
+      docker_container:
+        name: eezyn_joomla
+        hostname: "joomla_{{ ansible_hostname }}"
+        image: joomla
+        network_mode: host
+        privileged: yes
+        etc_hosts:
+          mysql: "{{ hostvars[inventory_hostname][ansible_cluster_interface]['ipv4']['address'] }}"
+        volumes:
+            - /root/joomla/joomla_web_data:/var/www/html:z
+        env:
+          JOOMLA_DB_HOST: mysql
+          JOOMLA_DB_USER: "{{ joomla_db_user }}"
+          JOOMLA_DB_PASSWORD: "{{ joomla_db_pass }}"
+          JOOMLA_DB_NAME: "{{ joomla_db }}"
+        recreate: yes
+
+    - name: Wait for primary Joomla container initialization & data replication
+      shell: |
+        docker logs eezyn_joomla 2>&1 | grep "This server is now configured to run Joomla!"
+      register: joomla_boot
+      retries: 80
+      delay: 5
+      until: joomla_boot.rc == 0
+  when: inventory_hostname == primary
+
+- name: Run Joomla docker container on non-primary nodes
+  docker_container:
+    name: eezyn_joomla
+    hostname: "joomla_{{ ansible_hostname }}"
+    image: joomla
+    network_mode: host
+    privileged: yes
+    etc_hosts:
+      mysql: "{{ hostvars[inventory_hostname][ansible_cluster_interface]['ipv4']['address'] }}"
+    volumes:
+      - /root/joomla/joomla_web_data:/var/www/html:z
+    env:
+      JOOMLA_DB_HOST: mysql
+      JOOMLA_DB_USER: "{{ joomla_db_user }}"
+      JOOMLA_DB_PASSWORD: "{{ joomla_db_pass }}"
+      JOOMLA_DB_NAME: "{{ joomla_db }}"
+    recreate: yes
+  when: inventory_hostname != primary
+
+- name: Unlink install dir
+  shell: |
+    docker exec -it eezyn_joomla rm -rf /var/www/html/installation/
+  failed_when: False
+  when: inventory_hostname == primary
+
+- name: Set docker-gluster-sysctl settings (web data replication)
+  shell: |
+    docker exec -it eezyn_joomla sysctl  -{{ item }}
+  with_items:
+    - w vm.swappiness=0
+    - w net.core.rmem_max=67108864
+    - w net.core.wmem_max=67108864
+    - w net.ipv4.tcp_rmem="4096 87380 33554432"
+    - w net.ipv4.tcp_rmem="4096 87380 33554432"
+    - w net.ipv4.tcp_wmem="4096 87380 33554432"
+    - w net.core.netdev_max_backlog=30000
+    - w net.ipv4.tcp_congestion_control=htcp
+    - p /etc/sysctl.conf
+  when: nodes | int  > 1

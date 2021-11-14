@@ -1,0 +1,35 @@
+global
+    daemon
+    maxconn 5000
+    stats socket /usr/local/etc/haproxy/haproxy.sock mode 0600 level admin
+defaults
+    timeout connect 5000ms
+    timeout client 50000ms
+    timeout server 50000ms
+
+frontend front_in
+    bind {{ haproxy_bind_address }}:80
+    ##  SSL binding ##
+    # bind {{ haproxy_bind_address }}:443 ssl crt /etc/ssl/certs/server.pem
+    maxconn 3000
+    default_backend joomla_backend
+
+backend joomla_backend
+    mode http
+	option forwardfor
+	option http-keep-alive
+	cookie SRVNAME insert
+    ##  Force SSL ##
+    # redirect scheme https if !{ ssl_fc }
+    balance leastconn
+{% for n in groups['app_servers'] %}
+    server {{ hostvars[n].ansible_hostname }} {{ hostvars[n][haproxy_ansible_interface]['ipv4']['address'] }}:80 maxconn 30000 check inter 2000 rise 2 fall 5 cookie ck_{{ hostvars[n].ansible_hostname }}
+{% endfor %}
+
+listen stats
+   bind :{{ haproxy_stats_port }}
+   mode http
+   stats enable
+   stats realm Haproxy\ Statistics
+   stats uri {{ haproxy_stats_uri }}
+   stats auth {{ haproxy_user }}:{{ haproxy_pass }}

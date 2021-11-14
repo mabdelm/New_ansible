@@ -1,0 +1,191 @@
+---
+
+- name: Firewalld - Punch a hole for MariaDB
+  firewalld:
+    port: "{{ item }}/tcp"
+    permanent: true
+    state: enabled
+    immediate: yes
+  with_items:
+    - 3306 
+    - 4567
+    - 4568
+    - 4444
+
+- name: Skip database initialization on non-primary nodes 
+  file:
+    path: /root/galera/galera_data/mysql
+    state: directory
+  when: inventory_hostname != primary
+
+- name: Copy MariaDB container dependencies
+  copy:
+    src: "{{ item }}"
+    dest: "/root/galera/{{ item }}"
+  with_items:
+    - galera-entrypoint.sh
+    - Dockerfile
+
+- name: +x attrib to galera-entrypoint.sh file
+  file:
+    path: "/root/galera/galera-entrypoint.sh"
+    mode: "u+x,g+x,o+x"
+
+- name: Build MariaDB Docker image
+  shell: |
+    docker build -t galera /root/galera/ > /root/galera/build.log
+
+- name: Set MariaDB container hostname vars
+  set_fact:
+    mariadb_hostname: "mariadb_{{ ansible_hostname }}"
+ 
+- block:
+    - name: Run standalone MariaDB docker container for 1 single AppSrv
+      docker_container:
+        name: eezyn_galera
+        hostname: "{{ mariadb_hostname }}"
+        image: galera
+        network_mode: host
+        command: mysqld
+        recreate: yes
+        volumes:
+          - /root/galera/galera_data:/var/lib/mysql:Z
+        env:
+          MYSQL_DATABASE: "{{ joomla_db }}"
+          MYSQL_USER: "{{ joomla_db_user }}"
+          MYSQL_PASSWORD: "{{ joomla_db_pass }}"
+          MYSQL_ROOT_PASSWORD: "{{ mariadb_root_paswd }}"
+
+    - name: Wait for standalone MariaDB container initialization
+      shell: |
+        docker logs eezyn_galera 2>&1 | grep "InnoDB: Buffer pool(s) load completed at"
+      register: standalone
+      retries: 40
+      delay: 3
+      until: standalone.rc == 0
+  when: nodes | int  == 1
+
+- block:
+    - name: Force primary Galera node be safe to bootstrap ( non-new-cluster )
+      lineinfile:
+        path: /root/galera/galera_data/grastate.dat
+        regexp: 'safe_to_bootstrap'
+        line: 'safe_to_bootstrap: 1'
+      failed_when: False
+
+    - name: Run MariaDB docker container on primary node for bootstrap ( non-new-cluster )
+      docker_container:
+        name: eezyn_galera
+        hostname: "{{ mariadb_hostname }}"
+        image: galera
+        network_mode: host
+        command: mysqld --wsrep-new-cluster
+        recreate: yes
+        volumes:
+          - /root/galera/galera_data:/var/lib/mysql:Z
+        env:
+          WSREP_NODE_ADDRESS: "{{ hostvars[inventory_hostname][ansible_cluster_interface]['ipv4']['address'] }}"
+          WSREP_CLUSTER_ADDRESS: "gcomm://{{ play_hosts | map('extract', hostvars, [ansible_cluster_interface,'ipv4','address']) | list | join(',') }}"
+
+    - name: Wait for primary MariaDB container to join the cluster ( non-new-cluster )
+      shell: |
+        docker logs eezyn_galera 2>&1 | grep {{ mariadb_hostname }} | grep "synced with group"
+      register: definitive
+      retries: 40
+      delay: 3
+      until: definitive.rc == 0
+  when: inventory_hostname == primary and new_cluster is not defined and nodes | int  > 1
+
+- block:
+    - name: New Cluster | Run temp MariaDB docker container on primary node for bootstrap
+      docker_container:
+        name: eezyn_galera_bootstrap
+        hostname: "{{ mariadb_hostname }}_bootstrap"
+        image: galera
+        network_mode: host
+        command: mysqld --wsrep-new-cluster
+        recreate: yes
+        volumes:
+          - /root/galera/galera_data:/var/lib/mysql:Z
+        env:
+          MYSQL_DATABASE: "{{ joomla_db }}"
+          MYSQL_USER: "{{ joomla_db_user }}"
+          MYSQL_PASSWORD: "{{ joomla_db_pass }}"
+          MYSQL_ROOT_PASSWORD: "{{ mariadb_root_paswd }}"
+          WSREP_NODE_ADDRESS: "{{ hostvars[inventory_hostname][ansible_cluster_interface]['ipv4']['address'] }}"
+          WSREP_CLUSTER_ADDRESS: gcomm://
+
+    - name: New Cluster | Wait for bootstrap on temp MariaDB container
+      shell: |
+        docker logs eezyn_galera_bootstrap 2>&1 | grep "Synchronized with group, ready for connections"
+      register: bootstrap
+      retries: 40
+      delay: 3
+      until: bootstrap.rc == 0
+  when: inventory_hostname == primary and new_cluster is defined and nodes | int  > 1
+
+- name: Run MariaDB docker container on other nodes
+  docker_container:
+    name: eezyn_galera
+    hostname: "mariadb_{{ ansible_hostname }}"
+    image: galera
+    network_mode: host
+    command: mysqld
+    recreate: yes 
+    volumes:
+      - /root/galera/galera_data:/var/lib/mysql:Z
+    env:
+      WSREP_NODE_ADDRESS: "{{ hostvars[inventory_hostname][ansible_cluster_interface]['ipv4']['address'] }}"
+      WSREP_CLUSTER_ADDRESS: "gcomm://{{ play_hosts | map('extract', hostvars, [ansible_cluster_interface,'ipv4','address']) | list | join(',') }}"
+  when: inventory_hostname != primary and nodes | int  > 1
+
+- name: Wait for non-primary MariaDB nodes to join the cluster
+  shell: |
+    docker logs eezyn_galera 2>&1 | grep {{ mariadb_hostname }} | grep "synced with group"
+  register: join
+  retries: 40
+  delay: 3
+  until: join.rc == 0
+  when: inventory_hostname != primary and nodes | int  > 1
+
+- name: New Cluster | Stop temp MariaDB docker container used for bootstrap
+  docker_container:
+    name: eezyn_galera_bootstrap
+    state: stopped
+  when: inventory_hostname == primary and new_cluster is defined and nodes | int  > 1
+
+- name: New Cluster | Run the definitive MariaDB docker container on primary node
+  docker_container:
+    name: eezyn_galera
+    hostname: "{{ mariadb_hostname }}"
+    image: galera
+    network_mode: host
+    command: mysqld
+    recreate: yes
+    volumes:
+      - /root/galera/galera_data:/var/lib/mysql:Z
+    env:
+      WSREP_NODE_ADDRESS: "{{ hostvars[inventory_hostname][ansible_cluster_interface]['ipv4']['address'] }}"
+      WSREP_CLUSTER_ADDRESS: "gcomm://{{ play_hosts | map('extract', hostvars, [ansible_cluster_interface,'ipv4','address']) | list | join(',') }}"
+  when: inventory_hostname == primary and new_cluster is defined and nodes | int  > 1
+
+- name: New Cluster | Wait for definitive MariaDB container to join the cluster
+  shell: |
+    docker logs eezyn_galera 2>&1 | grep {{ mariadb_hostname }} | grep "synced with group"
+  register: definitive
+  retries: 40
+  delay: 3
+  until: definitive.rc == 0
+  when: inventory_hostname == primary and new_cluster is defined and nodes | int  > 1
+
+- name: get cluster status
+  shell: |
+    docker exec -it eezyn_galera mysql -uroot -p{{ mariadb_root_paswd }} -e "SHOW GLOBAL STATUS WHERE Variable_name IN ('wsrep_ready', 'wsrep_cluster_size', 'wsrep_cluster_status', 'wsrep_connected');"
+  register: cluster_status
+  changed_when: false
+  when: inventory_hostname == primary and nodes | int  > 1
+
+- name: show cluster status
+  debug: msg="{{ cluster_status.stdout_lines }}"
+  changed_when: false
+  when: inventory_hostname == primary and nodes | int  > 1

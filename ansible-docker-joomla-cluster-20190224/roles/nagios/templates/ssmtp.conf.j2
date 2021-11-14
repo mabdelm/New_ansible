@@ -1,0 +1,31 @@
+#
+# Config file for sSMTP sendmail
+#
+# The person who gets all mail for userids < 1000
+# Make this empty to disable rewriting.
+root={{ postfix_email_sender }}
+
+# The place where the mail goes. The actual machine name is required no
+# MX records are consulted. Commonly mailhosts are named mail.domain.com
+mailhub={{ postfix_smtp_server }}:{{ postfix_smtp_port }}
+
+# Where will the mail seem to come from?
+rewriteDomain={{ postfix_email_sender.split('@')[-1] }}
+
+# The full hostname
+hostname=nagios_{{ ansible_hostname }}
+
+# Are users allowed to set their own From: address?
+# YES - Allow the user to specify their own From: address
+# NO - Use the system generated From: address
+
+# Use SSL/TLS before starting negotiation
+UseTLS=Yes
+UseSTARTTLS=Yes
+
+# Username/Password
+AuthUser={{ postfix_email_sender }}
+AuthPass={{ postfix_email_passwd }}
+ 
+# Email 'From header's can override the default domain?
+FromLineOverride=yes

@@ -1,0 +1,8 @@
+{% for server in play_hosts %}
+define host {
+		use	linux-server
+		host_name	{{hostvars[server].ansible_hostname}}
+		address	{{hostvars[server][nagios_ansible_interface]['ipv4']['address']}}
+}
+
+{% endfor %}

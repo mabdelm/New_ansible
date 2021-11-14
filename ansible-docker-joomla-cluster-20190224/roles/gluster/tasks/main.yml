@@ -1,0 +1,119 @@
+---
+- name: Create settings folders
+  file:
+    path: "{{ item.folder }}"
+    state: "{{  item.state }}"
+  with_items:
+    - { folder: /root/gluster/lib, state: absent }
+    - { folder: /root/gluster/logs, state: absent }
+    - { folder: /root/gluster/settings, state: absent }
+    - { folder: /root/gluster/lib, state: directory }
+    - { folder: /root/gluster/logs, state: directory }
+    - { folder: /root/gluster/settings, state: directory }
+
+- name: Copy server container's dependencies
+  copy:
+    src: "{{ item }}"
+    dest: "/root/gluster/{{ item }}"
+  with_items:
+    - Dockerfile
+    - check_diskspace.sh
+    - fake-disk.sh
+    - gluster-block-setup.service
+    - gluster-block-setup.sh
+    - gluster-check-diskspace.service
+    - gluster-fake-disk.service
+    - gluster-setup.service
+    - gluster-setup.sh
+    - status-probe.sh
+    - tcmu-runner-params
+    - update-params.sh
+
+- name: Build Gluster Server Docker image
+  shell: |
+    docker build -t gluster /root/gluster/ > /root/gluster/build.log
+
+- name: Run Gluster Server container
+  docker_container:
+    name:  eezyn_gluster
+    hostname: "gluster_{{ ansible_hostname }}"
+    image: gluster
+    network_mode: host
+    privileged: yes
+    recreate: yes
+    volumes:
+      - /root/gluster/brick:/data/brick/joomla:z
+      - /root/gluster/settings:/etc/glusterfs:z
+      - /root/gluster/lib:/var/lib/glusterd:z
+      - /root/gluster/logs:/var/log/glusterfs:z
+      - /sys/fs/cgroup:/sys/fs/cgroup:ro
+      - /dev/:/dev
+
+- name: Firewalld - Punch a hole for GlusterFS
+  firewalld:
+    port: "{{ item }}"
+    permanent: true
+    state: enabled
+    immediate: yes
+  with_items:
+    - 2222/tcp
+    - 111/tcp
+    - 139/tcp
+    - 245/tcp
+    - 24007/tcp
+    - 2049/tcp
+    - 8080/tcp
+    - 6010/tcp
+    - 6011/tcp
+    - 6012/tcp
+    - 38465/tcp
+    - 38466/tcp
+    - 38468/tcp
+    - 38469/tcp
+    - 49152/tcp
+    - 49153/tcp
+    - 49154/tcp
+    - 49156/tcp
+    - 49157/tcp
+    - 49158/tcp
+    - 49159/tcp
+    - 49160/tcp
+    - 49161/tcp
+    - 49162/tcp
+    - 111/udp
+    - 443/tcp
+    - 445/tcp
+    - 631/tcp
+    - 963/udp
+    - 965/tcp
+    - 24008/tcp
+    - 24009/tcp
+
+- name: Set docker-gluster-sysctl settings
+  shell: |
+    docker exec -it eezyn_gluster sysctl  -{{ item }}
+  with_items:
+    - w net.core.rmem_max=67108864
+    - w net.core.wmem_max=67108864
+    - w net.ipv4.tcp_rmem="4096 87380 33554432"
+    - w net.ipv4.tcp_wmem="4096 65536 33554432"
+    - w net.core.netdev_max_backlog=30000
+    - w net.ipv4.tcp_congestion_control=htcp
+    - p /etc/sysctl.conf
+
+- name: Create a trusted storage pool
+  shell: |
+    docker exec -it  eezyn_gluster gluster peer probe {{ hostvars[inventory_hostname][ansible_cluster_interface]['ipv4']['address'] }}
+  delegate_to: "{{ primary }}"
+  when: inventory_hostname != primary
+
+- name: Get GlusterFS pool status
+  shell: |
+    docker exec -it  eezyn_gluster gluster peer status
+  register: glusterfs_status
+  when: inventory_hostname == primary
+
+- name: Show GlusterFS pool status
+  debug: msg="{{ glusterfs_status.stdout_lines }}"
+  changed_when: false
+  when: inventory_hostname == primary

@@ -1,0 +1,48 @@
+---
+- name: AppSrv - Ensure scalability
+  hosts: galera
+  vars_files:
+    - vars/main.yml
+  tasks:
+    - name: Create folders on non-primary nodes
+      file:
+        path: "{{ item.folder }}"
+        state: "{{  item.state }}"
+      with_items:
+        - { folder: /root/galera, state: absent }
+        - { folder: /root/galera/galera_data, state: directory }
+        - { folder: /root/gluster, state: absent }
+        - { folder: /root/gluster/brick, state: directory }
+        - { folder: /root/joomla, state: absent }
+        - { folder: /root/joomla/joomla_web_data, state: directory }
+      when: inventory_hostname != primary
+
+    - name: Create needed folders on primary node
+      file:
+        path: "{{ item.folder }}"
+        state: "{{  item.state }}"
+      with_items:
+        - { folder: /root/galera, state: absent }
+        - { folder: /root/galera/galera_data, state: directory }
+        - { folder: /root/gluster, state: absent }
+        - { folder: /root/gluster/brick, state: directory }
+        - { folder: /root/joomla, state: absent }
+        - { folder: /root/joomla/joomla_web_data, state: directory }
+      when: inventory_hostname == primary and ( new_cluster is defined or restore_site is defined )
+
+- name: GlusterFS configure when cluster has more than 1 AppSrv & BkSrv node
+  hosts: galera
+  vars_files:
+    - vars/main.yml
+  roles:
+    - role: gluster
+      when:  nodes | int  > 1
+
+- name: Configure App/Bkp Servers
+  hosts: galera
+  vars_files:
+    - vars/main.yml
+  roles:
+    - role: memcached
+    - role: mariadb-galera
+    - role: httpd-joomla
